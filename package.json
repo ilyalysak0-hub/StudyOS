@@ -3,8 +3,7 @@
 "version": "1.0.0",
 "private": true,
 "scripts": {
-"start": "node server.js",
-"postinstall": "node -e "console.log('Postinstall started')""
+"start": "node server.js"
 },
 "engines": {
 "node": ">=18 <27"
