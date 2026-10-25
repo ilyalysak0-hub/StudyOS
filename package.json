@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "npx puppeteer browsers install chrome",
+    "build": "npx puppeteer browsers install chrome chrome-headless-shell",
     "start": "node server.js"
   },
   "engines": {
