@@ -3,9 +3,8 @@
 "version": "1.0.0",
 "private": true,
 "scripts": {
-"build": "node -e "console.log('Installing dependencies')"",
-"postinstall": "puppeteer browsers install chrome",
-"start": "node server.js"
+"start": "node server.js",
+"postinstall": "node -e "console.log('Postinstall started')""
 },
 "engines": {
 "node": ">=18 <27"
