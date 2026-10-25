@@ -12,58 +12,45 @@ app: "StudyOS",
 status: "online",
 message: "Сервер работает!"
 },
-
-```
 "/api/schedule": {
-  schedule: [],
-  connected: false,
-  message: "Расписание пока не подключено к МЭШ"
+schedule: [],
+connected: false,
+message: "Расписание пока не подключено к МЭШ"
 },
-
 "/api/homework": {
-  homework: [],
-  connected: false,
-  message: "Домашние задания пока не подключены к МЭШ"
+homework: [],
+connected: false,
+message: "Домашние задания пока не подключены к МЭШ"
 },
-
 "/api/grades": {
-  grades: [],
-  connected: false,
-  message: "Оценки пока не подключены к МЭШ"
+grades: [],
+connected: false,
+message: "Оценки пока не подключены к МЭШ"
 }
-```
-
 };
 
 if (path === "/") {
 res.setHeader("Content-Type", "text/html; charset=utf-8");
 res.writeHead(200);
-
-```
 res.end(`
-  <!DOCTYPE html>
-  <html lang="ru">
-  <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>StudyOS Server</title>
-  </head>
-  <body style="font-family:Arial;background:#10131b;color:white;padding:30px">
-    <h1 style="color:#9b8cff">StudyOS 🚀</h1>
-    <p>Сервер работает!</p>
-    <p>
-      <a style="color:#b4a7ff" href="/api/status">
-        Проверить API
-      </a>
-    </p>
-  </body>
-  </html>
-`);
 
-return;
-```
+<!DOCTYPE html>
 
-}
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StudyOS Server</title>
+</head>
+<body style="font-family:Arial;background:#10131b;color:white;padding:30px">
+  <h1 style="color:#9b8cff">StudyOS 🚀</h1>
+  <p>Сервер работает!</p>
+  <p><a style="color:#b4a7ff" href="/api/status">Проверить API</a></p>
+</body>
+</html>
+    `);
+    return;
+  }
 
 if (routes[path]) {
 res.writeHead(200);
