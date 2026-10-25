@@ -1,11 +1,14 @@
 {
-  "name": "studyos-server",
-  "version": "1.0.0",
-  "private": true,
-  "scripts": {
-    "start": "node server.js"
-  },
-  "engines": {
-    "node": ">=18"
-  }
+"name": "studyos-server",
+"version": "1.0.0",
+"private": true,
+"scripts": {
+"start": "node server.js"
+},
+"engines": {
+"node": ">=18"
+},
+"dependencies": {
+"dnevnik-mos-ru-api": "1.3.1"
+}
 }
