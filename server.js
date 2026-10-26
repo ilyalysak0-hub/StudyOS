@@ -5,24 +5,27 @@ const puppeteer = require("puppeteer");
 
 let meshClient = null;
 let meshStatus = "not_configured";
+let meshError = null;
 
 async function connectMesh() {
   const login = process.env.MESH_LOGIN;
   const password = process.env.MESH_PASSWORD;
 
   if (!login || !password) {
+    meshStatus = "not_configured";
     console.log("МЭШ: логин или пароль не настроен");
     return;
   }
 
+  let auth;
+
   try {
+    console.log("Проверяем Chrome...");
+
     const chromePath = puppeteer.executablePath();
 
     console.log("Chrome path:", chromePath);
-    console.log(
-      "Chrome exists:",
-      fs.existsSync(chromePath)
-    );
+    console.log("Chrome exists:", fs.existsSync(chromePath));
 
     if (!fs.existsSync(chromePath)) {
       throw new Error("Chrome не найден: " + chromePath);
@@ -30,139 +33,120 @@ async function connectMesh() {
 
     const Dnevnik = require("dnevnik-mos-ru-api");
 
-    const auth = new Dnevnik.PuppeteerAuthenticator(
+    auth = new Dnevnik.PuppeteerAuthenticator(
       login,
       password,
       {
         headless: true,
-        sandbox: false
+        sandbox: false,
+        browserArgs: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage"
+        ]
       }
     );
 
+    console.log("Запускаем Chrome...");
     await auth.init();
-    await auth.authenticate();
+
+    console.log("Начинаем авторизацию МЭШ...");
+
+    await Promise.race([
+      auth.authenticate(),
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error("Авторизация МЭШ превысила лимит ожидания")),
+          90000
+        )
+      )
+    ]);
 
     meshClient = new Dnevnik.DnevnikClient(auth);
     meshStatus = "connected";
+    meshError = null;
 
     console.log("МЭШ успешно подключена");
   } catch (error) {
     meshStatus = "error";
+    meshError = error.message;
+
     console.error("Ошибка подключения МЭШ:", error.message);
-  }
-}
 
-const server = http.createServer(async (req, res) => {
-  const pathname = new URL(
-    req.url,
-    "http://localhost"
-  ).pathname;
-
-  res.setHeader("Access-Control-Allow-Origin", "*");
-
-  if (pathname === "/" || pathname === "/index.html") {
-    fs.readFile(
-      path.join(__dirname, "index.html"),
-      (error, content) => {
-        if (error) {
-          res.writeHead(500, {
-            "Content-Type": "text/plain; charset=utf-8"
-          });
-          res.end("Не удалось прочитать index.html");
-          return;
-        }
-
-        res.writeHead(200, {
-          "Content-Type": "text/html; charset=utf-8"
-        });
-
-        res.end(content);
-      }
-    );
-
-    return;
-  }
-
-  res.setHeader(
-    "Content-Type",
-    "application/json; charset=utf-8"
-  );
-
-  if (pathname === "/api/status") {
-    res.writeHead(200);
-    res.end(JSON.stringify({
-      app: "StudyOS",
-      status: "online",
-      mesh: meshStatus
-    }));
-    return;
-  }
-
-  if (pathname === "/api/mesh/status") {
-    res.writeHead(200);
-    res.end(JSON.stringify({
-      connected: Boolean(meshClient),
-      status: meshStatus
-    }));
-    return;
-  }
-
-  if (
-    [
-      "/api/schedule",
-      "/api/homework",
-      "/api/grades"
-    ].includes(pathname)
-  ) {
-    if (!meshClient) {
-      res.writeHead(503);
-      res.end(JSON.stringify({
-        error: "МЭШ пока не подключена",
-        status: meshStatus
-      }));
-      return;
+    if (error.stack) {
+      console.error(error.stack);
     }
 
     try {
-      const { DateTime } = require("luxon");
-      const from = DateTime.now().minus({ days: 7 });
-
-      let data;
-
-      if (pathname === "/api/schedule") {
-        data = await meshClient.getSchedule(from);
-      } else if (pathname === "/api/homework") {
-        data = await meshClient.getHomework(from);
-      } else {
-        data = await meshClient.getMarks(from);
+      if (auth && typeof auth.close === "function") {
+        await auth.close();
       }
-
-      res.writeHead(200);
-      res.end(JSON.stringify({ data }));
-    } catch (error) {
-      console.error(
-        "Ошибка получения данных МЭШ:",
-        error.message
-      );
-
-      res.writeHead(502);
-      res.end(JSON.stringify({
-        error: "Не удалось получить данные из МЭШ"
-      }));
+    } catch (closeError) {
+      console.error("Ошибка закрытия браузера:", closeError.message);
     }
+  }
+}
 
-    return;
+const server = http.createServer((req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    return res.end();
   }
 
-  res.writeHead(404);
-  res.end(JSON.stringify({
-    error: "Маршрут не найден"
-  }));
+  const url = new URL(req.url, "http://localhost");
+
+  if (url.pathname === "/api/status") {
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({
+      status: "online",
+      mesh: meshStatus
+    }));
+  }
+
+  if (url.pathname === "/api/mesh/status") {
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({
+      status: meshStatus,
+      connected: meshStatus === "connected",
+      error: meshError
+    }));
+  }
+
+  if (url.pathname === "/api/schedule" ||
+      url.pathname === "/api/homework" ||
+      url.pathname === "/api/grades") {
+    res.writeHead(503, { "Content-Type": "application/json; charset=utf-8" });
+    return res.end(JSON.stringify({
+      error: "Получение данных пока недоступно",
+      meshStatus
+    }));
+  }
+
+  if (url.pathname === "/" || url.pathname === "/index.html") {
+    const indexPath = path.join(__dirname, "index.html");
+
+    if (!fs.existsSync(indexPath)) {
+      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      return res.end("Файл index.html не найден");
+    }
+
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    return fs.createReadStream(indexPath).pipe(res);
+  }
+
+  res.writeHead(404, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify({ error: "Not found" }));
 });
 
-const port = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
-server.listen(port, "0.0.0.0", () => {
-  console.log("StudyOS server started on port " + port);
-  connectMesh();
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`StudyOS server started on port ${PORT}`);
+  connectMesh().catch(error => {
+    console.error("Критическая ошибка МЭШ:", error.message);
+  });
 });
