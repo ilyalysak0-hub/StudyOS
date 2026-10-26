@@ -20,8 +20,6 @@ async function connectMesh() {
   let auth;
 
   try {
-    console.log("Проверяем Chrome...");
-
     const chromePath = puppeteer.executablePath();
 
     console.log("Chrome path:", chromePath);
@@ -50,17 +48,10 @@ async function connectMesh() {
     console.log("Запускаем Chrome...");
     await auth.init();
 
-    console.log("Начинаем авторизацию МЭШ...");
+    console.log("Chrome запущен. Начинаем авторизацию...");
+    console.log("Переходим к диагностике авторизации.");
 
-    await Promise.race([
-      auth.authenticate(),
-      new Promise((_, reject) =>
-        setTimeout(
-          () => reject(new Error("Авторизация МЭШ превысила лимит ожидания")),
-          90000
-        )
-      )
-    ]);
+    await auth.authenticate();
 
     meshClient = new Dnevnik.DnevnikClient(auth);
     meshStatus = "connected";
@@ -73,16 +64,27 @@ async function connectMesh() {
 
     console.error("Ошибка подключения МЭШ:", error.message);
 
-    if (error.stack) {
-      console.error(error.stack);
-    }
-
     try {
-      if (auth && typeof auth.close === "function") {
-        await auth.close();
+      const browser = auth?._browser;
+
+      if (browser) {
+        const pages = await browser.pages();
+
+        for (const page of pages) {
+          console.log("URL после ошибки:", page.url());
+
+          try {
+            console.log(
+              "Заголовок страницы:",
+              await page.title()
+            );
+          } catch (e) {
+            console.log("Не удалось получить заголовок:", e.message);
+          }
+        }
       }
-    } catch (closeError) {
-      console.error("Ошибка закрытия браузера:", closeError.message);
+    } catch (debugError) {
+      console.error("Ошибка диагностики:", debugError.message);
     }
   }
 }
@@ -100,7 +102,10 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, "http://localhost");
 
   if (url.pathname === "/api/status") {
-    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8"
+    });
+
     return res.end(JSON.stringify({
       status: "online",
       mesh: meshStatus
@@ -108,7 +113,10 @@ const server = http.createServer((req, res) => {
   }
 
   if (url.pathname === "/api/mesh/status") {
-    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8"
+    });
+
     return res.end(JSON.stringify({
       status: meshStatus,
       connected: meshStatus === "connected",
@@ -116,10 +124,15 @@ const server = http.createServer((req, res) => {
     }));
   }
 
-  if (url.pathname === "/api/schedule" ||
-      url.pathname === "/api/homework" ||
-      url.pathname === "/api/grades") {
-    res.writeHead(503, { "Content-Type": "application/json; charset=utf-8" });
+  if (
+    url.pathname === "/api/schedule" ||
+    url.pathname === "/api/homework" ||
+    url.pathname === "/api/grades"
+  ) {
+    res.writeHead(503, {
+      "Content-Type": "application/json; charset=utf-8"
+    });
+
     return res.end(JSON.stringify({
       error: "Получение данных пока недоступно",
       meshStatus
@@ -130,15 +143,24 @@ const server = http.createServer((req, res) => {
     const indexPath = path.join(__dirname, "index.html");
 
     if (!fs.existsSync(indexPath)) {
-      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      res.writeHead(404, {
+        "Content-Type": "text/plain; charset=utf-8"
+      });
+
       return res.end("Файл index.html не найден");
     }
 
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8"
+    });
+
     return fs.createReadStream(indexPath).pipe(res);
   }
 
-  res.writeHead(404, { "Content-Type": "application/json; charset=utf-8" });
+  res.writeHead(404, {
+    "Content-Type": "application/json; charset=utf-8"
+  });
+
   res.end(JSON.stringify({ error: "Not found" }));
 });
 
@@ -146,6 +168,7 @@ const PORT = process.env.PORT || 10000;
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`StudyOS server started on port ${PORT}`);
+
   connectMesh().catch(error => {
     console.error("Критическая ошибка МЭШ:", error.message);
   });
