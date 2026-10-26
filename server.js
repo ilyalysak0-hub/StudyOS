@@ -1,16 +1,69 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
-const { setTimeout: delay } = require("timers/promises");
+const dns = require("dns").promises;
 const puppeteer = require("puppeteer");
 
 let meshStatus = "checking";
 let meshError = null;
 let meshClient = null;
-let diagnostics = {
+
+const diagnostics = {
+  dns: "not_checked",
   http: "not_checked",
-  chrome: "not_checked"
+  chrome: "not_checked",
+  details: {}
 };
+
+function logErrorDetails(label, error) {
+  console.error(label);
+
+  let current = error;
+  let level = 0;
+
+  while (current && level < 5) {
+    console.error(`Уровень ${level}:`, {
+      name: current.name,
+      message: current.message,
+      code: current.code,
+      errno: current.errno,
+      syscall: current.syscall,
+      hostname: current.hostname,
+      address: current.address,
+      port: current.port
+    });
+
+    current = current.cause;
+    level++;
+  }
+}
+
+async function checkDns() {
+  console.log("=== Проверка DNS ===");
+
+  try {
+    const addresses = await dns.lookup("school.mos.ru", {
+      all: true
+    });
+
+    diagnostics.dns = "success";
+    diagnostics.details.dns = addresses;
+
+    console.log("DNS работает. Адреса:", addresses);
+
+    return true;
+  } catch (error) {
+    diagnostics.dns = "failed";
+    diagnostics.details.dns = {
+      message: error.message,
+      code: error.code
+    };
+
+    logErrorDetails("Ошибка DNS:", error);
+
+    return false;
+  }
+}
 
 async function checkHttpAccess() {
   console.log("=== Проверка HTTP-доступа к МЭШ ===");
@@ -26,8 +79,12 @@ async function checkHttpAccess() {
     });
 
     diagnostics.http = "success";
+    diagnostics.details.http = {
+      status: response.status,
+      url: response.url
+    };
 
-    console.log("HTTP-доступ работает");
+    console.log("HTTP-запрос успешен");
     console.log("HTTP-статус:", response.status);
     console.log("Итоговый URL:", response.url);
 
@@ -36,11 +93,24 @@ async function checkHttpAccess() {
     return true;
   } catch (error) {
     diagnostics.http = "failed";
+    diagnostics.details.http = {
+      name: error.name,
+      message: error.message,
+      cause: error.cause
+        ? {
+            name: error.cause.name,
+            message: error.cause.message,
+            code: error.cause.code,
+            errno: error.cause.errno,
+            syscall: error.cause.syscall,
+            hostname: error.cause.hostname,
+            address: error.cause.address,
+            port: error.cause.port
+          }
+        : null
+    };
 
-    console.error(
-      "Ошибка HTTP-доступа:",
-      error.name === "AbortError" ? "Тайм-аут 12 секунд" : error.message
-    );
+    logErrorDetails("Подробная ошибка HTTP:", error);
 
     return false;
   } finally {
@@ -56,36 +126,57 @@ async function checkChromeAccess(browser) {
   try {
     page = await browser.newPage();
 
-    page.setDefaultNavigationTimeout(12000);
+    page.setDefaultNavigationTimeout(15000);
+
+    page.on("requestfailed", request => {
+      console.error("Неудачный запрос Chrome:", {
+        url: request.url(),
+        error: request.failure()?.errorText
+      });
+    });
+
+    page.on("request", request => {
+      if (
+        request.url().startsWith("https://school.mos.ru") ||
+        request.url().startsWith("http://school.mos.ru")
+      ) {
+        console.log("Запрос Chrome:", request.url());
+      }
+    });
 
     const response = await page.goto("https://school.mos.ru", {
       waitUntil: "domcontentloaded",
-      timeout: 12000
+      timeout: 15000
     });
 
     diagnostics.chrome = "success";
+    diagnostics.details.chrome = {
+      url: page.url(),
+      status: response?.status() ?? null
+    };
 
-    console.log("Chrome открыл сайт МЭШ");
+    console.log("Chrome открыл сайт");
     console.log("URL:", page.url());
     console.log("HTTP-статус:", response?.status() ?? "нет ответа");
 
     return true;
   } catch (error) {
     diagnostics.chrome = "failed";
+    diagnostics.details.chrome = {
+      name: error.name,
+      message: error.message
+    };
 
-    console.error(
-      "Ошибка Chrome:",
-      error.name === "TimeoutError"
-        ? "Тайм-аут 12 секунд"
-        : error.message
-    );
+    logErrorDetails("Подробная ошибка Chrome:", error);
 
     return false;
   } finally {
     if (page) {
       try {
         await page.close();
-      } catch {}
+      } catch (error) {
+        console.error("Не удалось закрыть страницу:", error.message);
+      }
     }
   }
 }
@@ -94,7 +185,7 @@ async function connectMesh() {
   const login = process.env.MESH_LOGIN;
   const password = process.env.MESH_PASSWORD;
 
-  console.log("=== Запуск диагностики МЭШ ===");
+  console.log("=== Диагностика МЭШ ===");
   console.log("Логин задан:", Boolean(login?.trim()));
   console.log("Пароль задан:", Boolean(password));
 
@@ -104,10 +195,12 @@ async function connectMesh() {
   if (!login?.trim() || !password) {
     meshStatus = "not_configured";
     meshError = "Не заданы MESH_LOGIN или MESH_PASSWORD";
+
     console.error(meshError);
     return;
   }
 
+  const dnsWorks = await checkDns();
   const httpWorks = await checkHttpAccess();
 
   let browser;
@@ -136,24 +229,26 @@ async function connectMesh() {
 
     const chromeWorks = await checkChromeAccess(browser);
 
-    console.log("=== Результаты диагностики ===");
+    console.log("=== ИТОГ ДИАГНОСТИКИ ===");
+    console.log("DNS:", diagnostics.dns);
     console.log("HTTP:", diagnostics.http);
     console.log("Chrome:", diagnostics.chrome);
 
     if (!httpWorks && !chromeWorks) {
       throw new Error(
-        "МЭШ недоступна и через HTTP, и через Chrome. " +
-        "Проверьте сетевой доступ Render к school.mos.ru."
+        "HTTP и Chrome не смогли открыть school.mos.ru. " +
+        "Смотри подробные сетевые ошибки в Runtime Logs. " +
+        "DNS: " + (dnsWorks ? "работает" : "не работает")
       );
     }
 
     if (!chromeWorks) {
       throw new Error(
-        "HTTP-запрос к МЭШ работает, но Chrome не смог открыть сайт."
+        "HTTP-запрос работает, но Chrome не смог открыть сайт МЭШ."
       );
     }
 
-    console.log("Пробуем авторизацию через библиотеку МЭШ");
+    console.log("=== Запуск авторизации МЭШ ===");
 
     const Dnevnik = require("dnevnik-mos-ru-api");
 
@@ -167,15 +262,15 @@ async function connectMesh() {
       }
     );
 
-    const authTimeout = new Promise((_, reject) => {
-      setTimeout(() => {
-        reject(new Error("Авторизация МЭШ не завершилась за 45 секунд"));
-      }, 45000);
-    });
-
     const result = await Promise.race([
       auth.authenticate(),
-      authTimeout
+      new Promise((_, reject) => {
+        setTimeout(() => {
+          reject(
+            new Error("Авторизация МЭШ не завершилась за 45 секунд")
+          );
+        }, 45000);
+      })
     ]);
 
     if (!result) {
@@ -185,6 +280,7 @@ async function connectMesh() {
     }
 
     meshClient = new Dnevnik.DnevnikClient(auth);
+
     meshStatus = "connected";
     meshError = null;
 
@@ -194,7 +290,7 @@ async function connectMesh() {
     meshStatus = "error";
     meshError = error?.message || "Неизвестная ошибка";
 
-    console.error("Ошибка МЭШ:", meshError);
+    logErrorDetails("Ошибка подключения МЭШ:", error);
 
   } finally {
     if (browser) {
@@ -274,7 +370,21 @@ const server = http.createServer((req, res) => {
       "Content-Type": "text/html; charset=utf-8"
     });
 
-    return fs.createReadStream(indexPath).pipe(res);
+    const stream = fs.createReadStream(indexPath);
+
+    stream.on("error", error => {
+      console.error("Ошибка чтения index.html:", error.message);
+
+      if (!res.headersSent) {
+        res.writeHead(500, {
+          "Content-Type": "text/plain; charset=utf-8"
+        });
+      }
+
+      res.end("Ошибка чтения главной страницы");
+    });
+
+    return stream.pipe(res);
   }
 
   res.writeHead(404, {
@@ -294,6 +404,7 @@ server.listen(PORT, "0.0.0.0", () => {
   connectMesh().catch(error => {
     meshStatus = "error";
     meshError = error?.message || "Неизвестная ошибка";
-    console.error("Критическая ошибка:", meshError);
+
+    logErrorDetails("Критическая ошибка:", error);
   });
 });
