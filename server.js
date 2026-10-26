@@ -1,26 +1,114 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const { setTimeout: delay } = require("timers/promises");
 const puppeteer = require("puppeteer");
 
-let meshStatus = "not_configured";
+let meshStatus = "checking";
 let meshError = null;
 let meshClient = null;
+let diagnostics = {
+  http: "not_checked",
+  chrome: "not_checked"
+};
+
+async function checkHttpAccess() {
+  console.log("=== Проверка HTTP-доступа к МЭШ ===");
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+
+  try {
+    const response = await fetch("https://school.mos.ru", {
+      method: "GET",
+      redirect: "follow",
+      signal: controller.signal
+    });
+
+    diagnostics.http = "success";
+
+    console.log("HTTP-доступ работает");
+    console.log("HTTP-статус:", response.status);
+    console.log("Итоговый URL:", response.url);
+
+    await response.body?.cancel();
+
+    return true;
+  } catch (error) {
+    diagnostics.http = "failed";
+
+    console.error(
+      "Ошибка HTTP-доступа:",
+      error.name === "AbortError" ? "Тайм-аут 12 секунд" : error.message
+    );
+
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function checkChromeAccess(browser) {
+  console.log("=== Проверка доступа через Chrome ===");
+
+  let page;
+
+  try {
+    page = await browser.newPage();
+
+    page.setDefaultNavigationTimeout(12000);
+
+    const response = await page.goto("https://school.mos.ru", {
+      waitUntil: "domcontentloaded",
+      timeout: 12000
+    });
+
+    diagnostics.chrome = "success";
+
+    console.log("Chrome открыл сайт МЭШ");
+    console.log("URL:", page.url());
+    console.log("HTTP-статус:", response?.status() ?? "нет ответа");
+
+    return true;
+  } catch (error) {
+    diagnostics.chrome = "failed";
+
+    console.error(
+      "Ошибка Chrome:",
+      error.name === "TimeoutError"
+        ? "Тайм-аут 12 секунд"
+        : error.message
+    );
+
+    return false;
+  } finally {
+    if (page) {
+      try {
+        await page.close();
+      } catch {}
+    }
+  }
+}
 
 async function connectMesh() {
   const login = process.env.MESH_LOGIN;
   const password = process.env.MESH_PASSWORD;
 
-  console.log("=== Проверка МЭШ ===");
-  console.log("Логин задан:", Boolean(login));
+  console.log("=== Запуск диагностики МЭШ ===");
+  console.log("Логин задан:", Boolean(login?.trim()));
   console.log("Пароль задан:", Boolean(password));
+
+  meshStatus = "checking";
+  meshError = null;
 
   if (!login?.trim() || !password) {
     meshStatus = "not_configured";
-    meshError = "Не заданы переменные MESH_LOGIN или MESH_PASSWORD";
+    meshError = "Не заданы MESH_LOGIN или MESH_PASSWORD";
     console.error(meshError);
     return;
   }
+
+  const httpWorks = await checkHttpAccess();
 
   let browser;
 
@@ -46,31 +134,26 @@ async function connectMesh() {
 
     console.log("Chrome запущен");
 
-    const page = await browser.newPage();
+    const chromeWorks = await checkChromeAccess(browser);
 
-    page.setDefaultNavigationTimeout(20000);
+    console.log("=== Результаты диагностики ===");
+    console.log("HTTP:", diagnostics.http);
+    console.log("Chrome:", diagnostics.chrome);
 
-    try {
-      console.log("Проверяем доступность school.mos.ru");
-
-      const response = await page.goto("https://school.mos.ru", {
-        waitUntil: "domcontentloaded",
-        timeout: 20000
-      });
-
-      console.log("URL:", page.url());
-      console.log("HTTP-статус:", response?.status() ?? "нет ответа");
-      console.log("Сайт МЭШ открылся");
-
-    } catch (error) {
-      console.error("Не удалось открыть сайт МЭШ:", error.message);
-      throw error;
-
-    } finally {
-      await page.close();
+    if (!httpWorks && !chromeWorks) {
+      throw new Error(
+        "МЭШ недоступна и через HTTP, и через Chrome. " +
+        "Проверьте сетевой доступ Render к school.mos.ru."
+      );
     }
 
-    console.log("Передаём браузер библиотеке авторизации");
+    if (!chromeWorks) {
+      throw new Error(
+        "HTTP-запрос к МЭШ работает, но Chrome не смог открыть сайт."
+      );
+    }
+
+    console.log("Пробуем авторизацию через библиотеку МЭШ");
 
     const Dnevnik = require("dnevnik-mos-ru-api");
 
@@ -84,10 +167,21 @@ async function connectMesh() {
       }
     );
 
-    const result = await auth.authenticate();
+    const authTimeout = new Promise((_, reject) => {
+      setTimeout(() => {
+        reject(new Error("Авторизация МЭШ не завершилась за 45 секунд"));
+      }, 45000);
+    });
+
+    const result = await Promise.race([
+      auth.authenticate(),
+      authTimeout
+    ]);
 
     if (!result) {
-      throw new Error("Авторизация не подтверждена библиотекой");
+      throw new Error(
+        "Библиотека не подтвердила успешную авторизацию."
+      );
     }
 
     meshClient = new Dnevnik.DnevnikClient(auth);
@@ -145,7 +239,8 @@ const server = http.createServer((req, res) => {
     return res.end(JSON.stringify({
       status: meshStatus,
       connected: meshStatus === "connected",
-      error: meshError
+      error: meshError,
+      diagnostics
     }));
   }
 
