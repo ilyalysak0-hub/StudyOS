@@ -6,7 +6,7 @@
     "start": "node server.js"
   },
   "engines": {
-    "node": ">=18 <27"
+    "node": "22.x"
   },
   "dependencies": {
     "dnevnik-mos-ru-api": "1.3.1",
