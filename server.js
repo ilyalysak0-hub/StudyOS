@@ -2,6 +2,8 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const dns = require("dns").promises;
+const net = require("net");
+const tls = require("tls");
 const puppeteer = require("puppeteer");
 
 let meshStatus = "checking";
@@ -10,7 +12,10 @@ let meshClient = null;
 
 const diagnostics = {
   dns: "not_checked",
+  tcp: "not_checked",
+  tls: "not_checked",
   http: "not_checked",
+  controlHttp: "not_checked",
   chrome: "not_checked",
   details: {}
 };
@@ -38,8 +43,105 @@ function logErrorDetails(label, error) {
   }
 }
 
+function checkTcpAddress(address, port = 443, timeoutMs = 6000) {
+  return new Promise(resolve => {
+    const socket = net.createConnection({
+      host: address,
+      port
+    });
+
+    let finished = false;
+
+    function finish(result) {
+      if (finished) return;
+      finished = true;
+
+      socket.destroy();
+      resolve({
+        address,
+        port,
+        ...result
+      });
+    }
+
+    socket.setTimeout(timeoutMs);
+
+    socket.once("connect", () => {
+      finish({
+        success: true,
+        message: "TCP-соединение установлено"
+      });
+    });
+
+    socket.once("timeout", () => {
+      finish({
+        success: false,
+        error: "TCP_TIMEOUT"
+      });
+    });
+
+    socket.once("error", error => {
+      finish({
+        success: false,
+        error: error.code || error.message
+      });
+    });
+  });
+}
+
+function checkTlsAddress(address, timeoutMs = 6000) {
+  return new Promise(resolve => {
+    const socket = tls.connect({
+      host: address,
+      port: 443,
+      servername: "school.mos.ru",
+      rejectUnauthorized: true
+    });
+
+    let finished = false;
+
+    function finish(result) {
+      if (finished) return;
+      finished = true;
+
+      socket.destroy();
+
+      resolve({
+        address,
+        ...result
+      });
+    }
+
+    socket.setTimeout(timeoutMs);
+
+    socket.once("secureConnect", () => {
+      finish({
+        success: true,
+        message: "TLS-соединение установлено",
+        protocol: socket.getProtocol(),
+        authorized: socket.authorized,
+        authorizationError: socket.authorizationError || null
+      });
+    });
+
+    socket.once("timeout", () => {
+      finish({
+        success: false,
+        error: "TLS_TIMEOUT"
+      });
+    });
+
+    socket.once("error", error => {
+      finish({
+        success: false,
+        error: error.code || error.message
+      });
+    });
+  });
+}
+
 async function checkDns() {
-  console.log("=== Проверка DNS ===");
+  console.log("=== 1. ПРОВЕРКА DNS ===");
 
   try {
     const addresses = await dns.lookup("school.mos.ru", {
@@ -49,11 +151,12 @@ async function checkDns() {
     diagnostics.dns = "success";
     diagnostics.details.dns = addresses;
 
-    console.log("DNS работает. Адреса:", addresses);
+    console.log("DNS работает:", addresses);
 
-    return true;
+    return addresses;
   } catch (error) {
     diagnostics.dns = "failed";
+
     diagnostics.details.dns = {
       message: error.message,
       code: error.code
@@ -61,38 +164,99 @@ async function checkDns() {
 
     logErrorDetails("Ошибка DNS:", error);
 
-    return false;
+    return [];
   }
 }
 
+async function checkTcpAccess(addresses) {
+  console.log("=== 2. ПРОВЕРКА TCP ПОРТА 443 ===");
+
+  if (!addresses.length) {
+    diagnostics.tcp = "skipped";
+    diagnostics.details.tcp = "Нет IP-адресов для проверки";
+    return false;
+  }
+
+  const results = await Promise.all(
+    addresses.map(item =>
+      checkTcpAddress(item.address)
+    )
+  );
+
+  diagnostics.details.tcp = results;
+
+  const success = results.some(result => result.success);
+
+  diagnostics.tcp = success ? "success" : "failed";
+
+  for (const result of results) {
+    console.log("TCP:", result);
+  }
+
+  return success;
+}
+
+async function checkTlsAccess(addresses) {
+  console.log("=== 3. ПРОВЕРКА TLS ===");
+
+  if (!addresses.length) {
+    diagnostics.tls = "skipped";
+    diagnostics.details.tls = "Нет IP-адресов для проверки";
+    return false;
+  }
+
+  const results = await Promise.all(
+    addresses.map(item =>
+      checkTlsAddress(item.address)
+    )
+  );
+
+  diagnostics.details.tls = results;
+
+  const success = results.some(result => result.success);
+
+  diagnostics.tls = success ? "success" : "failed";
+
+  for (const result of results) {
+    console.log("TLS:", result);
+  }
+
+  return success;
+}
+
 async function checkHttpAccess() {
-  console.log("=== Проверка HTTP-доступа к МЭШ ===");
+  console.log("=== 4. ПРОВЕРКА HTTPS МЭШ ===");
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12000);
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, 10000);
 
   try {
-    const response = await fetch("https://school.mos.ru", {
+    const response = await fetch("https://school.mos.ru/", {
       method: "GET",
       redirect: "follow",
       signal: controller.signal
     });
 
     diagnostics.http = "success";
+
     diagnostics.details.http = {
       status: response.status,
       url: response.url
     };
 
-    console.log("HTTP-запрос успешен");
-    console.log("HTTP-статус:", response.status);
-    console.log("Итоговый URL:", response.url);
+    console.log("HTTPS МЭШ:", {
+      status: response.status,
+      url: response.url
+    });
 
     await response.body?.cancel();
 
     return true;
   } catch (error) {
     diagnostics.http = "failed";
+
     diagnostics.details.http = {
       name: error.name,
       message: error.message,
@@ -100,17 +264,66 @@ async function checkHttpAccess() {
         ? {
             name: error.cause.name,
             message: error.cause.message,
-            code: error.cause.code,
-            errno: error.cause.errno,
-            syscall: error.cause.syscall,
-            hostname: error.cause.hostname,
-            address: error.cause.address,
-            port: error.cause.port
+            code: error.cause.code
           }
         : null
     };
 
-    logErrorDetails("Подробная ошибка HTTP:", error);
+    logErrorDetails("Ошибка HTTPS МЭШ:", error);
+
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function checkControlHttp() {
+  console.log("=== 5. КОНТРОЛЬНЫЙ HTTPS-ЗАПРОС ===");
+
+  const controller = new AbortController();
+
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, 8000);
+
+  try {
+    const response = await fetch("https://example.com/", {
+      method: "GET",
+      signal: controller.signal,
+      redirect: "follow"
+    });
+
+    diagnostics.controlHttp = "success";
+
+    diagnostics.details.controlHttp = {
+      status: response.status,
+      url: response.url
+    };
+
+    console.log("Контрольный HTTPS работает:", {
+      status: response.status,
+      url: response.url
+    });
+
+    await response.body?.cancel();
+
+    return true;
+  } catch (error) {
+    diagnostics.controlHttp = "failed";
+
+    diagnostics.details.controlHttp = {
+      name: error.name,
+      message: error.message,
+      cause: error.cause
+        ? {
+            name: error.cause.name,
+            message: error.cause.message,
+            code: error.cause.code
+          }
+        : null
+    };
+
+    logErrorDetails("Ошибка контрольного HTTPS:", error);
 
     return false;
   } finally {
@@ -119,7 +332,7 @@ async function checkHttpAccess() {
 }
 
 async function checkChromeAccess(browser) {
-  console.log("=== Проверка доступа через Chrome ===");
+  console.log("=== 6. ПРОВЕРКА CHROME ===");
 
   let page;
 
@@ -129,45 +342,42 @@ async function checkChromeAccess(browser) {
     page.setDefaultNavigationTimeout(15000);
 
     page.on("requestfailed", request => {
-      console.error("Неудачный запрос Chrome:", {
+      console.error("Запрос Chrome не удался:", {
         url: request.url(),
         error: request.failure()?.errorText
       });
     });
 
-    page.on("request", request => {
-      if (
-        request.url().startsWith("https://school.mos.ru") ||
-        request.url().startsWith("http://school.mos.ru")
-      ) {
-        console.log("Запрос Chrome:", request.url());
+    const response = await page.goto(
+      "https://school.mos.ru/",
+      {
+        waitUntil: "domcontentloaded",
+        timeout: 15000
       }
-    });
-
-    const response = await page.goto("https://school.mos.ru", {
-      waitUntil: "domcontentloaded",
-      timeout: 15000
-    });
+    );
 
     diagnostics.chrome = "success";
+
     diagnostics.details.chrome = {
       url: page.url(),
       status: response?.status() ?? null
     };
 
-    console.log("Chrome открыл сайт");
-    console.log("URL:", page.url());
-    console.log("HTTP-статус:", response?.status() ?? "нет ответа");
+    console.log("Chrome открыл МЭШ:", {
+      url: page.url(),
+      status: response?.status() ?? null
+    });
 
     return true;
   } catch (error) {
     diagnostics.chrome = "failed";
+
     diagnostics.details.chrome = {
       name: error.name,
       message: error.message
     };
 
-    logErrorDetails("Подробная ошибка Chrome:", error);
+    logErrorDetails("Ошибка Chrome:", error);
 
     return false;
   } finally {
@@ -175,9 +385,33 @@ async function checkChromeAccess(browser) {
       try {
         await page.close();
       } catch (error) {
-        console.error("Не удалось закрыть страницу:", error.message);
+        console.error(
+          "Ошибка закрытия страницы:",
+          error.message
+        );
       }
     }
+  }
+}
+
+async function authenticateWithTimeout(auth, timeoutMs = 45000) {
+  let timer;
+
+  try {
+    return await Promise.race([
+      auth.authenticate(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            new Error(
+              `Авторизация не завершилась за ${timeoutMs / 1000} секунд`
+            )
+          );
+        }, timeoutMs);
+      })
+    ]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -185,12 +419,16 @@ async function connectMesh() {
   const login = process.env.MESH_LOGIN;
   const password = process.env.MESH_PASSWORD;
 
-  console.log("=== Диагностика МЭШ ===");
-  console.log("Логин задан:", Boolean(login?.trim()));
-  console.log("Пароль задан:", Boolean(password));
-
   meshStatus = "checking";
   meshError = null;
+  meshClient = null;
+
+  console.log("==================================");
+  console.log("ЗАПУСК ДИАГНОСТИКИ STUDYOS");
+  console.log("==================================");
+
+  console.log("Логин задан:", Boolean(login?.trim()));
+  console.log("Пароль задан:", Boolean(password));
 
   if (!login?.trim() || !password) {
     meshStatus = "not_configured";
@@ -200,12 +438,25 @@ async function connectMesh() {
     return;
   }
 
-  const dnsWorks = await checkDns();
-  const httpWorks = await checkHttpAccess();
-
   let browser;
 
   try {
+    const addresses = await checkDns();
+
+    if (!addresses.length) {
+      throw new Error(
+        "Не удалось получить IP-адреса school.mos.ru"
+      );
+    }
+
+    await checkTcpAccess(addresses);
+
+    await checkTlsAccess(addresses);
+
+    const httpWorks = await checkHttpAccess();
+
+    await checkControlHttp();
+
     const chromePath = puppeteer.executablePath();
 
     if (!fs.existsSync(chromePath)) {
@@ -229,26 +480,31 @@ async function connectMesh() {
 
     const chromeWorks = await checkChromeAccess(browser);
 
-    console.log("=== ИТОГ ДИАГНОСТИКИ ===");
+    console.log("==================================");
+    console.log("ИТОГ ДИАГНОСТИКИ");
     console.log("DNS:", diagnostics.dns);
-    console.log("HTTP:", diagnostics.http);
+    console.log("TCP:", diagnostics.tcp);
+    console.log("TLS:", diagnostics.tls);
+    console.log("МЭШ HTTPS:", diagnostics.http);
+    console.log("Контрольный HTTPS:", diagnostics.controlHttp);
     console.log("Chrome:", diagnostics.chrome);
+    console.log("==================================");
 
     if (!httpWorks && !chromeWorks) {
       throw new Error(
-        "HTTP и Chrome не смогли открыть school.mos.ru. " +
-        "Смотри подробные сетевые ошибки в Runtime Logs. " +
-        "DNS: " + (dnsWorks ? "работает" : "не работает")
+        "Не удалось открыть МЭШ через HTTPS и Chrome. " +
+        "Смотри результаты TCP, TLS и контрольного HTTPS."
       );
     }
 
     if (!chromeWorks) {
       throw new Error(
-        "HTTP-запрос работает, но Chrome не смог открыть сайт МЭШ."
+        "HTTPS-запрос и Chrome работают по-разному. " +
+        "Авторизация не запускалась."
       );
     }
 
-    console.log("=== Запуск авторизации МЭШ ===");
+    console.log("=== ЗАПУСК АВТОРИЗАЦИИ МЭШ ===");
 
     const Dnevnik = require("dnevnik-mos-ru-api");
 
@@ -262,20 +518,11 @@ async function connectMesh() {
       }
     );
 
-    const result = await Promise.race([
-      auth.authenticate(),
-      new Promise((_, reject) => {
-        setTimeout(() => {
-          reject(
-            new Error("Авторизация МЭШ не завершилась за 45 секунд")
-          );
-        }, 45000);
-      })
-    ]);
+    const result = await authenticateWithTimeout(auth);
 
     if (!result) {
       throw new Error(
-        "Библиотека не подтвердила успешную авторизацию."
+        "Библиотека не подтвердила успешную авторизацию"
       );
     }
 
@@ -285,20 +532,21 @@ async function connectMesh() {
     meshError = null;
 
     console.log("МЭШ подключена успешно");
-
   } catch (error) {
     meshStatus = "error";
     meshError = error?.message || "Неизвестная ошибка";
 
     logErrorDetails("Ошибка подключения МЭШ:", error);
-
   } finally {
     if (browser) {
       try {
         await browser.close();
         console.log("Chrome закрыт");
       } catch (error) {
-        console.error("Ошибка закрытия Chrome:", error.message);
+        console.error(
+          "Ошибка закрытия Chrome:",
+          error.message
+        );
       }
     }
   }
@@ -307,7 +555,10 @@ async function connectMesh() {
 const server = http.createServer((req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type"
+  );
 
   if (req.method === "OPTIONS") {
     res.writeHead(204);
@@ -355,7 +606,10 @@ const server = http.createServer((req, res) => {
     }));
   }
 
-  if (url.pathname === "/" || url.pathname === "/index.html") {
+  if (
+    url.pathname === "/" ||
+    url.pathname === "/index.html"
+  ) {
     const indexPath = path.join(__dirname, "index.html");
 
     if (!fs.existsSync(indexPath)) {
@@ -373,7 +627,10 @@ const server = http.createServer((req, res) => {
     const stream = fs.createReadStream(indexPath);
 
     stream.on("error", error => {
-      console.error("Ошибка чтения index.html:", error.message);
+      console.error(
+        "Ошибка чтения index.html:",
+        error.message
+      );
 
       if (!res.headersSent) {
         res.writeHead(500, {
@@ -391,7 +648,7 @@ const server = http.createServer((req, res) => {
     "Content-Type": "application/json; charset=utf-8"
   });
 
-  res.end(JSON.stringify({
+  return res.end(JSON.stringify({
     error: "Not found"
   }));
 });
