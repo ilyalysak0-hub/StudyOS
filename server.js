@@ -1,6 +1,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const puppeteer = require("puppeteer");
 
 let meshClient = null;
 let meshStatus = "not_configured";
@@ -9,14 +10,33 @@ async function connectMesh() {
   const login = process.env.MESH_LOGIN;
   const password = process.env.MESH_PASSWORD;
 
-  if (!login || !password) return;
+  if (!login || !password) {
+    console.log("МЭШ: логин или пароль не настроен");
+    return;
+  }
 
   try {
+    const chromePath = puppeteer.executablePath();
+
+    console.log("Chrome path:", chromePath);
+    console.log(
+      "Chrome exists:",
+      fs.existsSync(chromePath)
+    );
+
+    if (!fs.existsSync(chromePath)) {
+      throw new Error("Chrome не найден: " + chromePath);
+    }
+
     const Dnevnik = require("dnevnik-mos-ru-api");
+
     const auth = new Dnevnik.PuppeteerAuthenticator(
       login,
       password,
-      { headless: true }
+      {
+        headless: true,
+        sandbox: false
+      }
     );
 
     await auth.init();
@@ -24,6 +44,8 @@ async function connectMesh() {
 
     meshClient = new Dnevnik.DnevnikClient(auth);
     meshStatus = "connected";
+
+    console.log("МЭШ успешно подключена");
   } catch (error) {
     meshStatus = "error";
     console.error("Ошибка подключения МЭШ:", error.message);
@@ -31,29 +53,40 @@ async function connectMesh() {
 }
 
 const server = http.createServer(async (req, res) => {
-  const pathname = new URL(req.url, "http://localhost").pathname;
+  const pathname = new URL(
+    req.url,
+    "http://localhost"
+  ).pathname;
 
   res.setHeader("Access-Control-Allow-Origin", "*");
 
   if (pathname === "/" || pathname === "/index.html") {
-    fs.readFile(path.join(__dirname, "index.html"), (error, content) => {
-      if (error) {
-        res.writeHead(500, {
-          "Content-Type": "text/plain; charset=utf-8"
-        });
-        res.end("Не удалось прочитать index.html");
-        return;
-      }
+    fs.readFile(
+      path.join(__dirname, "index.html"),
+      (error, content) => {
+        if (error) {
+          res.writeHead(500, {
+            "Content-Type": "text/plain; charset=utf-8"
+          });
+          res.end("Не удалось прочитать index.html");
+          return;
+        }
 
-      res.writeHead(200, {
-        "Content-Type": "text/html; charset=utf-8"
-      });
-      res.end(content);
-    });
+        res.writeHead(200, {
+          "Content-Type": "text/html; charset=utf-8"
+        });
+
+        res.end(content);
+      }
+    );
+
     return;
   }
 
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader(
+    "Content-Type",
+    "application/json; charset=utf-8"
+  );
 
   if (pathname === "/api/status") {
     res.writeHead(200);
@@ -74,7 +107,13 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (["/api/schedule", "/api/homework", "/api/grades"].includes(pathname)) {
+  if (
+    [
+      "/api/schedule",
+      "/api/homework",
+      "/api/grades"
+    ].includes(pathname)
+  ) {
     if (!meshClient) {
       res.writeHead(503);
       res.end(JSON.stringify({
@@ -87,6 +126,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const { DateTime } = require("luxon");
       const from = DateTime.now().minus({ days: 7 });
+
       let data;
 
       if (pathname === "/api/schedule") {
@@ -100,17 +140,24 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200);
       res.end(JSON.stringify({ data }));
     } catch (error) {
-      console.error("Ошибка получения данных МЭШ:", error.message);
+      console.error(
+        "Ошибка получения данных МЭШ:",
+        error.message
+      );
+
       res.writeHead(502);
       res.end(JSON.stringify({
         error: "Не удалось получить данные из МЭШ"
       }));
     }
+
     return;
   }
 
   res.writeHead(404);
-  res.end(JSON.stringify({ error: "Маршрут не найден" }));
+  res.end(JSON.stringify({
+    error: "Маршрут не найден"
+  }));
 });
 
 const port = process.env.PORT || 3000;
