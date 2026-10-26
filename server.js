@@ -22,34 +22,54 @@ async function connectMesh() {
   try {
     const chromePath = puppeteer.executablePath();
 
-    console.log("Chrome path:", chromePath);
-    console.log("Chrome exists:", fs.existsSync(chromePath));
+    console.log("Chrome:", chromePath);
+    console.log("Chrome существует:", fs.existsSync(chromePath));
 
     if (!fs.existsSync(chromePath)) {
-      throw new Error("Chrome не найден: " + chromePath);
+      throw new Error("Chrome не найден");
     }
 
     const Dnevnik = require("dnevnik-mos-ru-api");
+
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-blink-features=AutomationControlled"
+      ]
+    });
 
     auth = new Dnevnik.PuppeteerAuthenticator(
       login,
       password,
       {
+        browser,
         headless: true,
-        sandbox: false,
-        browserArgs: [
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-dev-shm-usage"
-        ]
+        sandbox: false
       }
     );
 
-    console.log("Запускаем Chrome...");
-    await auth.init();
+    console.log("Chrome запущен");
 
-    console.log("Chrome запущен. Начинаем авторизацию...");
-    console.log("Переходим к диагностике авторизации.");
+    // Проверяем доступность главной страницы МЭШ отдельно
+    const page = await browser.newPage();
+
+    try {
+      const response = await page.goto("https://school.mos.ru", {
+        waitUntil: "domcontentloaded",
+        timeout: 60000
+      });
+
+      console.log("Страница МЭШ:", page.url());
+      console.log("HTTP-статус:", response?.status());
+      console.log("Заголовок:", await page.title());
+    } finally {
+      await page.close();
+    }
+
+    console.log("Запускаем авторизацию через библиотеку...");
 
     await auth.authenticate();
 
@@ -68,24 +88,23 @@ async function connectMesh() {
       const browser = auth?._browser;
 
       if (browser) {
-        const pages = await browser.pages();
-
-        for (const page of pages) {
+        for (const page of await browser.pages()) {
           console.log("URL после ошибки:", page.url());
 
           try {
-            console.log(
-              "Заголовок страницы:",
-              await page.title()
-            );
-          } catch (e) {
-            console.log("Не удалось получить заголовок:", e.message);
-          }
+            console.log("Заголовок:", await page.title());
+          } catch {}
         }
       }
     } catch (debugError) {
       console.error("Ошибка диагностики:", debugError.message);
     }
+
+    try {
+      if (auth?._browser) {
+        await auth.close();
+      }
+    } catch {}
   }
 }
 
@@ -161,7 +180,9 @@ const server = http.createServer((req, res) => {
     "Content-Type": "application/json; charset=utf-8"
   });
 
-  res.end(JSON.stringify({ error: "Not found" }));
+  res.end(JSON.stringify({
+    error: "Not found"
+  }));
 });
 
 const PORT = process.env.PORT || 10000;
@@ -170,6 +191,6 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`StudyOS server started on port ${PORT}`);
 
   connectMesh().catch(error => {
-    console.error("Критическая ошибка МЭШ:", error.message);
+    console.error("Критическая ошибка:", error.message);
   });
 });
