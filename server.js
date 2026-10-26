@@ -3,43 +3,35 @@ const fs = require("fs");
 const path = require("path");
 const puppeteer = require("puppeteer");
 
-let meshClient = null;
 let meshStatus = "not_configured";
 let meshError = null;
+let meshClient = null;
 
 async function connectMesh() {
-  // Читаем переменные окружения
   const login = process.env.MESH_LOGIN;
   const password = process.env.MESH_PASSWORD;
 
-  // Безопасная диагностика: секреты не выводим
-  console.log("=== Проверка настроек МЭШ ===");
-  console.log("MESH_LOGIN задан:", Boolean(login));
-  console.log("MESH_PASSWORD задан:", Boolean(password));
-  console.log("Длина логина:", login ? login.length : 0);
-  console.log("Длина пароля:", password ? password.length : 0);
+  console.log("=== Проверка МЭШ ===");
+  console.log("Логин задан:", Boolean(login));
+  console.log("Пароль задан:", Boolean(password));
 
   if (!login?.trim() || !password) {
     meshStatus = "not_configured";
-    meshError = "Не заданы MESH_LOGIN или MESH_PASSWORD в окружении сервера";
+    meshError = "Не заданы переменные MESH_LOGIN или MESH_PASSWORD";
     console.error(meshError);
     return;
   }
 
-  let browser = null;
-  let auth = null;
+  let browser;
 
   try {
     const chromePath = puppeteer.executablePath();
 
-    console.log("Chrome path:", chromePath);
-    console.log("Chrome существует:", fs.existsSync(chromePath));
-
     if (!fs.existsSync(chromePath)) {
-      throw new Error("Chrome не найден по указанному пути");
+      throw new Error("Chrome не найден: " + chromePath);
     }
 
-    const Dnevnik = require("dnevnik-mos-ru-api");
+    console.log("Chrome найден:", chromePath);
 
     browser = await puppeteer.launch({
       executablePath: chromePath,
@@ -54,27 +46,36 @@ async function connectMesh() {
 
     console.log("Chrome запущен");
 
-    // Проверяем доступность сайта МЭШ
-    const testPage = await browser.newPage();
+    const page = await browser.newPage();
+
+    page.setDefaultNavigationTimeout(20000);
 
     try {
-      console.log("Проверяем доступность school.mos.ru...");
+      console.log("Проверяем доступность school.mos.ru");
 
-      const response = await testPage.goto("https://school.mos.ru", {
-        waitUntil: "domcontentloaded",
-        timeout: 60000
+      const response = await page.goto("https://school.mos.ru", {
+        waitUntil: "commit",
+        timeout: 20000
       });
 
-      console.log("URL сайта МЭШ:", testPage.url());
-      console.log("HTTP-статус:", response?.status());
-      console.log("Заголовок страницы:", await testPage.title());
+      console.log("URL:", page.url());
+      console.log("HTTP-статус:", response?.status() ?? "нет ответа");
+
+      try {
+        await page.waitForSelector("body", { timeout: 5000 });
+        console.log("HTML-документ появился");
+      } catch {
+        console.log("Документ не появился за 5 секунд");
+      }
     } finally {
-      await testPage.close();
+      await page.close();
     }
 
-    console.log("Начинаем авторизацию МЭШ...");
+    console.log("Передаём браузер библиотеке авторизации");
 
-    auth = new Dnevnik.PuppeteerAuthenticator(
+    const Dnevnik = require("dnevnik-mos-ru-api");
+
+    const auth = new Dnevnik.PuppeteerAuthenticator(
       login,
       password,
       {
@@ -84,44 +85,31 @@ async function connectMesh() {
       }
     );
 
-    const authenticated = await auth.authenticate();
+    const result = await auth.authenticate();
 
-    if (!authenticated) {
-      throw new Error("Библиотека не подтвердила успешную авторизацию");
+    if (!result) {
+      throw new Error("Авторизация не подтверждена библиотекой");
     }
 
     meshClient = new Dnevnik.DnevnikClient(auth);
     meshStatus = "connected";
     meshError = null;
 
-    console.log("МЭШ успешно подключена");
+    console.log("МЭШ подключена успешно");
+
   } catch (error) {
     meshStatus = "error";
     meshError = error?.message || "Неизвестная ошибка";
 
-    console.error("Ошибка подключения МЭШ:", meshError);
+    console.error("Ошибка МЭШ:", meshError);
 
-    if (browser) {
-      try {
-        const pages = await browser.pages();
-
-        for (const page of pages) {
-          console.log("Диагностика URL:", page.url());
-
-          try {
-            console.log("Диагностика заголовка:", await page.title());
-          } catch {}
-        }
-      } catch {}
-    }
   } finally {
-    // Не оставляем браузер работать после завершения попытки
     if (browser) {
       try {
         await browser.close();
         console.log("Chrome закрыт");
       } catch (error) {
-        console.error("Не удалось закрыть Chrome:", error.message);
+        console.error("Ошибка закрытия Chrome:", error.message);
       }
     }
   }
@@ -212,6 +200,6 @@ server.listen(PORT, "0.0.0.0", () => {
   connectMesh().catch(error => {
     meshStatus = "error";
     meshError = error?.message || "Неизвестная ошибка";
-    console.error("Критическая ошибка МЭШ:", meshError);
+    console.error("Критическая ошибка:", meshError);
   });
 });
