@@ -1,141 +1,132 @@
-const http = require("http");
-const fs = require("fs");
-const path = require("path");
-
-let meshClient = null;
-let meshStatus = "not_configured";
-
-async function connectMesh() {
-  const login = process.env.MESH_LOGIN;
-  const password = process.env.MESH_PASSWORD;
-
-  if (!login || !password) return;
-
-  try {
-    const Dnevnik = require("dnevnik-mos-ru-api");
-    const auth = new Dnevnik.PuppeteerAuthenticator(
-      login,
-      password,
-      { headless: true }
-    );
-
-    await auth.init();
-    await auth.authenticate();
-
-    meshClient = new Dnevnik.DnevnikClient(auth);
-    meshStatus = "connected";
-  } catch (error) {
-    meshStatus = "error";
-    console.error("Ошибка подключения МЭШ:", error.message);
-  }
-}
-
-const server = http.createServer(async (req, res) => {
-  const pathname = new URL(req.url, "http://localhost").pathname;
-
-  res.setHeader("Access-Control-Allow-Origin", "*");
-
-  if (pathname === "/api/status") {
-    res.writeHead(200, {
-      "Content-Type": "application/json; charset=utf-8"
-    });
-    res.end(JSON.stringify({
-      app: "StudyOS",
-      status: "online",
-      mesh: meshStatus
-    }));
-    return;
-  }
-
-  if (pathname === "/api/mesh/status") {
-    res.writeHead(200, {
-      "Content-Type": "application/json; charset=utf-8"
-    });
-    res.end(JSON.stringify({
-      connected: Boolean(meshClient),
-      status: meshStatus
-    }));
-    return;
-  }
-
-  if (["/api/schedule", "/api/homework", "/api/grades"].includes(pathname)) {
-    if (!meshClient) {
-      res.writeHead(503, {
-        "Content-Type": "application/json; charset=utf-8"
-      });
-      res.end(JSON.stringify({
-        error: "МЭШ пока не подключена",
-        status: meshStatus
-      }));
-      return;
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StudyOS</title>
+  <style>
+    * {
+      box-sizing: border-box;
     }
 
-    try {
-      const Dnevnik = require("dnevnik-mos-ru-api");
-      const { DateTime } = require("luxon");
-      const from = DateTime.now().minus({ days: 7 });
-
-      let data;
-
-      if (pathname === "/api/schedule") {
-        data = await meshClient.getSchedule(from);
-      } else if (pathname === "/api/homework") {
-        data = await meshClient.getHomework(from);
-      } else {
-        data = await meshClient.getMarks(from);
-      }
-
-      res.writeHead(200, {
-        "Content-Type": "application/json; charset=utf-8"
-      });
-      res.end(JSON.stringify({ data }));
-    } catch (error) {
-      console.error("Ошибка получения данных МЭШ:", error.message);
-      res.writeHead(502, {
-        "Content-Type": "application/json; charset=utf-8"
-      });
-      res.end(JSON.stringify({
-        error: "Не удалось получить данные из МЭШ"
-      }));
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #0b1020;
+      color: white;
     }
-    return;
-  }
 
-  if (req.method !== "GET" && req.method !== "HEAD") {
-    res.writeHead(405);
-    res.end("Method Not Allowed");
-    return;
-  }
+    header {
+      padding: 24px;
+      background: #151d35;
+      border-bottom: 1px solid #293553;
+    }
 
-  if (pathname === "/" || pathname === "/index.html") {
-    const filePath = path.join(__dirname, "index.html");
+    header h1 {
+      margin: 0;
+      color: #7c9cff;
+    }
 
-    fs.readFile(filePath, (error, content) => {
-      if (error) {
-        res.writeHead(500, {
-          "Content-Type": "text/plain; charset=utf-8"
-        });
-        res.end("Не удалось прочитать index.html");
-        return;
+    header p {
+      color: #aab6d3;
+      margin-bottom: 0;
+    }
+
+    main {
+      max-width: 900px;
+      margin: 30px auto;
+      padding: 0 18px;
+    }
+
+    .card {
+      background: #151d35;
+      border: 1px solid #293553;
+      border-radius: 16px;
+      padding: 22px;
+      margin-bottom: 18px;
+    }
+
+    .card h2 {
+      margin-top: 0;
+    }
+
+    .status {
+      color: #facc15;
+    }
+
+    button {
+      background: #6685ff;
+      color: white;
+      border: 0;
+      border-radius: 10px;
+      padding: 12px 18px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #4d6de8;
+    }
+
+    footer {
+      text-align: center;
+      padding: 25px;
+      color: #8b98b8;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>StudyOS</h1>
+    <p>Твоя система для учёбы</p>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>Добро пожаловать!</h2>
+      <p>StudyOS запущен. Здесь будет твой учебный кабинет.</p>
+      <p>Статус сервера: <strong id="serverStatus" class="status">Проверяем...</strong></p>
+      <button onclick="checkServer()">Проверить сервер</button>
+    </section>
+
+    <section class="card">
+      <h2>📚 Расписание</h2>
+      <p>Здесь появится твоё расписание.</p>
+    </section>
+
+    <section class="card">
+      <h2>📝 Домашние задания</h2>
+      <p>Здесь будут отображаться домашние задания.</p>
+    </section>
+
+    <section class="card">
+      <h2>📊 Оценки</h2>
+      <p>Здесь будут отображаться оценки.</p>
+    </section>
+  </main>
+
+  <footer>StudyOS © 2026</footer>
+
+  <script>
+    async function checkServer() {
+      const status = document.getElementById("serverStatus");
+      status.textContent = "Проверяем...";
+
+      try {
+        const response = await fetch("/api/status");
+        if (!response.ok) throw new Error("Ошибка сервера");
+
+        const data = await response.json();
+        status.textContent =
+          data.status === "online" ? "Онлайн ✅" : "Не в сети";
+      } catch (error) {
+        status.textContent = "Ошибка соединения ❌";
       }
+    }
 
-      res.writeHead(200, {
-        "Content-Type": "text/html; charset=utf-8"
-      });
-      res.end(req.method === "HEAD" ? undefined : content);
-    });
-    return;
-  }
+    checkServer();
+  </script>
 
-  res.writeHead(404, {
-    "Content-Type": "application/json; charset=utf-8"
-  });
-  res.end(JSON.stringify({ error: "Маршрут не найден" }));
-});
-
-const port = process.env.PORT || 3000;
-
-server.listen(port, "0.0.0.0", () => {
-  console.log("StudyOS server started on port " + port);
-  connectMesh();
-});
+</body>
+</html>
