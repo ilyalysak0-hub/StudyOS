@@ -1,761 +1,141 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#10131b">
-<title>StudyOS — твоя школа</title>
+const http = require("http");
+const fs = require("fs");
+const path = require("path");
 
-<style>
-:root {
-  --bg: #10131b;
-  --panel: #191e2b;
-  --panel2: #252b3d;
-  --accent: #8873ff;
-  --text: #f5f6fa;
-  --muted: #aab1c2;
-  --border: #303748;
-  --green: #48d6a0;
-  --red: #ff727e;
-}
+let meshClient = null;
+let meshStatus = "not_configured";
 
-* { box-sizing: border-box; }
+async function connectMesh() {
+  const login = process.env.MESH_LOGIN;
+  const password = process.env.MESH_PASSWORD;
 
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: Arial, sans-serif;
-}
+  if (!login || !password) return;
 
-header {
-  padding: 25px 20px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--border);
-}
-
-.header-inner {
-  max-width: 1050px;
-  margin: auto;
-}
-
-h1 {
-  margin: 0;
-  color: var(--accent);
-  font-size: 32px;
-}
-
-header p {
-  margin-bottom: 0;
-  color: var(--muted);
-}
-
-nav {
-  display: flex;
-  gap: 8px;
-  padding: 12px;
-  background: var(--panel);
-  overflow-x: auto;
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  border-bottom: 1px solid var(--border);
-}
-
-nav button {
-  flex-shrink: 0;
-}
-
-button, input, select, textarea {
-  font: inherit;
-}
-
-button {
-  border: none;
-  border-radius: 11px;
-  padding: 12px 16px;
-  background: var(--panel2);
-  color: var(--text);
-  cursor: pointer;
-  transition: .15s;
-}
-
-button:hover {
-  filter: brightness(1.15);
-}
-
-button.active, .primary {
-  background: var(--accent);
-  color: white;
-}
-
-.danger {
-  background: #462631;
-  color: #ffb0b8;
-}
-
-main {
-  max-width: 900px;
-  margin: auto;
-  padding: 18px;
-}
-
-.page { display: none; }
-.page.show { display: block; }
-
-.card {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 18px;
-  padding: 20px;
-  margin-bottom: 15px;
-  overflow-wrap: anywhere;
-}
-
-h2 { margin-top: 0; }
-h3 { margin-bottom: 8px; }
-
-.muted {
-  color: var(--muted);
-  line-height: 1.6;
-}
-
-a { color: #b4a7ff; }
-
-.stats {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-  margin-bottom: 15px;
-}
-
-.stat {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 15px;
-  padding: 16px;
-}
-
-.stat strong {
-  display: block;
-  font-size: 27px;
-  color: var(--accent);
-  margin-bottom: 5px;
-}
-
-form {
-  display: grid;
-  gap: 10px;
-}
-
-input, select, textarea {
-  width: 100%;
-  min-width: 0;
-  padding: 13px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg);
-  color: var(--text);
-}
-
-textarea {
-  resize: vertical;
-}
-
-label {
-  color: var(--muted);
-  font-size: 14px;
-}
-
-.field {
-  display: grid;
-  gap: 6px;
-}
-
-.item {
-  padding: 15px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.item:last-child {
-  border-bottom: none;
-}
-
-.item-top {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 10px;
-}
-
-.item p {
-  margin: 8px 0;
-  color: var(--muted);
-  line-height: 1.5;
-}
-
-.item-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-  margin-top: 10px;
-}
-
-.item-actions button {
-  padding: 9px 11px;
-  font-size: 14px;
-}
-
-.badge {
-  display: inline-block;
-  padding: 5px 9px;
-  border-radius: 8px;
-  background: var(--panel2);
-  font-size: 12px;
-}
-
-.done {
-  color: var(--green);
-}
-
-.empty {
-  padding: 20px 0;
-  color: var(--muted);
-  text-align: center;
-}
-
-footer {
-  padding: 20px;
-  color: var(--muted);
-  text-align: center;
-  font-size: 13px;
-}
-
-@media (max-width: 550px) {
-  header { padding: 20px 16px; }
-  h1 { font-size: 28px; }
-  main { padding: 12px; }
-  .card { padding: 16px; }
-  .stats { gap: 7px; }
-  .stat { padding: 11px; }
-  .stat strong { font-size: 22px; }
-  nav { padding: 9px; }
-  nav button { padding: 11px 13px; }
-}
-</style>
-</head>
-
-<body>
-
-<header>
-  <div class="header-inner">
-    <h1>StudyOS</h1>
-    <p>Твоя школа — в одном месте ✨</p>
-  </div>
-</header>
-
-<nav>
-  <button class="active" data-page="home">🏠 Главная</button>
-  <button data-page="schedule">📅 Расписание</button>
-  <button data-page="homework">📚 Домашка</button>
-  <button data-page="grades">📊 Оценки</button>
-  <button data-page="ai">🤖 ИИ-помощник</button>
-</nav>
-
-<main>
-
-<section id="home" class="page show">
-  <div class="card">
-    <h2>Привет! 👋</h2>
-    <p>Добро пожаловать в StudyOS.</p>
-    <p class="muted">
-      Управляй уроками, домашними заданиями и оценками в одном месте.
-    </p>
-  </div>
-
-  <div class="stats">
-    <div class="stat">
-      <strong id="statLessons">0</strong>
-      <span class="muted">Уроков</span>
-    </div>
-    <div class="stat">
-      <strong id="statHomework">0</strong>
-      <span class="muted">Заданий</span>
-    </div>
-    <div class="stat">
-      <strong id="statGrades">0</strong>
-      <span class="muted">Оценок</span>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Быстрый доступ</h2>
-    <p><a href="https://school.mos.ru/" target="_blank" rel="noopener">
-      Открыть Московскую электронную школу ↗
-    </a></p>
-    <p class="muted">
-      Официальный дневник открывается отдельно. Автоматическое подключение
-      МЭШ пока не настроено.
-    </p>
-  </div>
-
-  <div class="card">
-    <h2>📌 Твои дела</h2>
-    <div id="homeSummary" class="muted">Загрузка...</div>
-  </div>
-</section>
-
-<section id="schedule" class="page">
-  <div class="card">
-    <h2>📅 Расписание</h2>
-    <p class="muted">Добавляй уроки, чтобы собрать своё расписание.</p>
-
-    <form id="scheduleForm">
-      <div class="field">
-        <label for="lessonDay">День недели</label>
-        <select id="lessonDay" required>
-          <option value="1">Понедельник</option>
-          <option value="2">Вторник</option>
-          <option value="3">Среда</option>
-          <option value="4">Четверг</option>
-          <option value="5">Пятница</option>
-          <option value="6">Суббота</option>
-          <option value="0">Воскресенье</option>
-        </select>
-      </div>
-
-      <div class="field">
-        <label for="lessonTime">Время</label>
-        <input id="lessonTime" type="time" required>
-      </div>
-
-      <div class="field">
-        <label for="lessonName">Предмет</label>
-        <input id="lessonName" placeholder="Например, математика" required maxlength="80">
-      </div>
-
-      <div class="field">
-        <label for="lessonRoom">Кабинет (необязательно)</label>
-        <input id="lessonRoom" placeholder="Например, 205" maxlength="30">
-      </div>
-
-      <button class="primary" type="submit">＋ Добавить урок</button>
-    </form>
-  </div>
-
-  <div class="card">
-    <h2>Мои уроки</h2>
-    <div id="scheduleList"></div>
-  </div>
-</section>
-
-<section id="homework" class="page">
-  <div class="card">
-    <h2>📚 Домашние задания</h2>
-
-    <form id="homeworkForm">
-      <div class="field">
-        <label for="hwSubject">Предмет</label>
-        <input id="hwSubject" placeholder="Например, физика" required maxlength="80">
-      </div>
-
-      <div class="field">
-        <label for="hwTask">Что нужно сделать?</label>
-        <textarea id="hwTask" rows="3" placeholder="Напиши задание..." required maxlength="1000"></textarea>
-      </div>
-
-      <div class="field">
-        <label for="hwDate">Срок выполнения</label>
-        <input id="hwDate" type="date">
-      </div>
-
-      <button class="primary" type="submit">＋ Добавить задание</button>
-    </form>
-  </div>
-
-  <div class="card">
-    <h2>Мои задания</h2>
-    <div id="homeworkList"></div>
-  </div>
-</section>
-
-<section id="grades" class="page">
-  <div class="card">
-    <h2>📊 Мои оценки</h2>
-
-    <form id="gradeForm">
-      <div class="field">
-        <label for="gradeSubject">Предмет</label>
-        <input id="gradeSubject" placeholder="Например, русский язык" required maxlength="80">
-      </div>
-
-      <div class="field">
-        <label for="gradeValue">Оценка</label>
-        <select id="gradeValue" required>
-          <option value="5">5 — отлично</option>
-          <option value="4">4 — хорошо</option>
-          <option value="3">3 — удовлетворительно</option>
-          <option value="2">2 — неудовлетворительно</option>
-        </select>
-      </div>
-
-      <div class="field">
-        <label for="gradeDate">Дата</label>
-        <input id="gradeDate" type="date" required>
-      </div>
-
-      <button class="primary" type="submit">＋ Добавить оценку</button>
-    </form>
-  </div>
-
-  <div class="card">
-    <h2>История оценок</h2>
-    <p class="muted">Средний балл считается по оценкам, которые ты добавил сюда.</p>
-    <h3 id="averageGrade">Средний балл: —</h3>
-    <div id="gradesList"></div>
-  </div>
-</section>
-
-<section id="ai" class="page">
-  <div class="card">
-    <h2>🤖 ИИ-помощник</h2>
-    <p class="muted">
-      Вставь условие задания. StudyOS откроет ChatGPT с подготовленным запросом.
-    </p>
-
-    <form id="aiForm">
-      <div class="field">
-        <label for="aiSubject">Предмет (необязательно)</label>
-        <input id="aiSubject" placeholder="Например, химия" maxlength="80">
-      </div>
-
-      <div class="field">
-        <label for="aiQuestion">Условие задания</label>
-        <textarea id="aiQuestion" rows="6" placeholder="Вставь задание сюда..." required maxlength="4000"></textarea>
-      </div>
-
-      <button class="primary" type="submit">Открыть ChatGPT ↗</button>
-    </form>
-
-    <p class="muted">
-      Для работы потребуется войти в ChatGPT. Прямая интеграция через API
-      пока не подключена.
-    </p>
-  </div>
-</section>
-
-</main>
-
-<footer>
-  StudyOS · Личный школьный помощник
-  <br><br>
-  Данные хранятся локально в этом браузере.
-</footer>
-
-<script>
-const DAYS = [
-  "Воскресенье", "Понедельник", "Вторник", "Среда",
-  "Четверг", "Пятница", "Суббота"
-];
-
-const KEY = "studyos_data_v2";
-
-function emptyData() {
-  return { schedule: [], homework: [], grades: [] };
-}
-
-function loadData() {
   try {
-    const saved = JSON.parse(localStorage.getItem(KEY));
-    if (saved && Array.isArray(saved.schedule) &&
-        Array.isArray(saved.homework) && Array.isArray(saved.grades)) {
-      return saved;
-    }
-  } catch (e) {
-    console.warn("Не удалось прочитать сохранённые данные", e);
-  }
-  return emptyData();
-}
-
-let data = loadData();
-
-function saveData() {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(data));
-    renderAll();
-  } catch (e) {
-    alert("Не получилось сохранить данные. Возможно, в браузере нет места.");
-  }
-}
-
-function makeId() {
-  return Date.now().toString(36) +
-    Math.random().toString(36).slice(2, 8);
-}
-
-// Создаём элементы безопасно, не вставляя пользовательский текст в HTML.
-function element(tag, className, text) {
-  const el = document.createElement(tag);
-  if (className) el.className = className;
-  if (text !== undefined) el.textContent = text;
-  return el;
-}
-
-function button(text, className, action) {
-  const b = element("button", className, text);
-  b.type = "button";
-  b.addEventListener("click", action);
-  return b;
-}
-
-function showPage(id) {
-  document.querySelectorAll(".page").forEach(p => {
-    p.classList.toggle("show", p.id === id);
-  });
-
-  document.querySelectorAll("nav button").forEach(b => {
-    b.classList.toggle("active", b.dataset.page === id);
-  });
-
-  window.scrollTo({ top: 0, behavior: "smooth" });
-}
-
-document.querySelectorAll("nav button").forEach(b => {
-  b.addEventListener("click", () => showPage(b.dataset.page));
-});
-
-function renderSchedule() {
-  const list = document.getElementById("scheduleList");
-  list.replaceChildren();
-
-  const lessons = [...data.schedule].sort((a, b) =>
-    Number(a.day) - Number(b.day) ||
-    a.time.localeCompare(b.time)
-  );
-
-  if (!lessons.length) {
-    list.append(element("div", "empty", "Пока нет уроков. Добавь первый выше."));
-    return;
-  }
-
-  lessons.forEach(lesson => {
-    const item = element("div", "item");
-    const top = element("div", "item-top");
-    const info = element("div");
-
-    info.append(
-      element("h3", "", lesson.subject),
-      element("p", "", DAYS[Number(lesson.day)] + " · " + lesson.time)
+    const Dnevnik = require("dnevnik-mos-ru-api");
+    const auth = new Dnevnik.PuppeteerAuthenticator(
+      login,
+      password,
+      { headless: true }
     );
 
-    if (lesson.room) {
-      info.append(element("p", "", "Кабинет: " + lesson.room));
-    }
+    await auth.init();
+    await auth.authenticate();
 
-    top.append(info);
-    item.append(top);
-
-    item.append(button("Удалить", "danger", () => {
-      if (!confirm("Удалить этот урок?")) return;
-      data.schedule = data.schedule.filter(x => x.id !== lesson.id);
-      saveData();
-    }));
-
-    list.append(item);
-  });
+    meshClient = new Dnevnik.DnevnikClient(auth);
+    meshStatus = "connected";
+  } catch (error) {
+    meshStatus = "error";
+    console.error("Ошибка подключения МЭШ:", error.message);
+  }
 }
 
-function renderHomework() {
-  const list = document.getElementById("homeworkList");
-  list.replaceChildren();
+const server = http.createServer(async (req, res) => {
+  const pathname = new URL(req.url, "http://localhost").pathname;
 
-  const tasks = [...data.homework].sort((a, b) =>
-    Number(a.done) - Number(b.done) ||
-    (a.date || "9999").localeCompare(b.date || "9999")
-  );
+  res.setHeader("Access-Control-Allow-Origin", "*");
 
-  if (!tasks.length) {
-    list.append(element("div", "empty", "Заданий пока нет. Добавь первое выше."));
+  if (pathname === "/api/status") {
+    res.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8"
+    });
+    res.end(JSON.stringify({
+      app: "StudyOS",
+      status: "online",
+      mesh: meshStatus
+    }));
     return;
   }
 
-  tasks.forEach(task => {
-    const item = element("div", "item");
-    const title = element("h3", task.done ? "done" : "", task.subject);
-    const description = element("p", "", task.text);
-    const status = element("span", "badge", task.done ? "Выполнено ✓" : "Не выполнено");
+  if (pathname === "/api/mesh/status") {
+    res.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8"
+    });
+    res.end(JSON.stringify({
+      connected: Boolean(meshClient),
+      status: meshStatus
+    }));
+    return;
+  }
 
-    item.append(title, status, description);
-
-    if (task.date) {
-      item.append(element("p", "", "Срок: " + task.date));
+  if (["/api/schedule", "/api/homework", "/api/grades"].includes(pathname)) {
+    if (!meshClient) {
+      res.writeHead(503, {
+        "Content-Type": "application/json; charset=utf-8"
+      });
+      res.end(JSON.stringify({
+        error: "МЭШ пока не подключена",
+        status: meshStatus
+      }));
+      return;
     }
 
-    const actions = element("div", "item-actions");
+    try {
+      const Dnevnik = require("dnevnik-mos-ru-api");
+      const { DateTime } = require("luxon");
+      const from = DateTime.now().minus({ days: 7 });
 
-    actions.append(button(
-      task.done ? "Вернуть в работу" : "✓ Выполнено",
-      "primary",
-      () => {
-        task.done = !task.done;
-        saveData();
+      let data;
+
+      if (pathname === "/api/schedule") {
+        data = await meshClient.getSchedule(from);
+      } else if (pathname === "/api/homework") {
+        data = await meshClient.getHomework(from);
+      } else {
+        data = await meshClient.getMarks(from);
       }
-    ));
 
-    actions.append(button("Удалить", "danger", () => {
-      if (!confirm("Удалить задание?")) return;
-      data.homework = data.homework.filter(x => x.id !== task.id);
-      saveData();
-    }));
-
-    item.append(actions);
-    list.append(item);
-  });
-}
-
-function renderGrades() {
-  const list = document.getElementById("gradesList");
-  list.replaceChildren();
-
-  const grades = [...data.grades].sort((a, b) =>
-    b.date.localeCompare(a.date)
-  );
-
-  if (!grades.length) {
-    document.getElementById("averageGrade").textContent = "Средний балл: —";
-    list.append(element("div", "empty", "Оценок пока нет. Добавь первую выше."));
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8"
+      });
+      res.end(JSON.stringify({ data }));
+    } catch (error) {
+      console.error("Ошибка получения данных МЭШ:", error.message);
+      res.writeHead(502, {
+        "Content-Type": "application/json; charset=utf-8"
+      });
+      res.end(JSON.stringify({
+        error: "Не удалось получить данные из МЭШ"
+      }));
+    }
     return;
   }
 
-  const average = grades.reduce((sum, g) => sum + Number(g.value), 0) /
-    grades.length;
-
-  document.getElementById("averageGrade").textContent =
-    "Средний балл: " + average.toFixed(2).replace(".", ",");
-
-  grades.forEach(grade => {
-    const item = element("div", "item");
-    const top = element("div", "item-top");
-    const info = element("div");
-
-    info.append(
-      element("h3", "", grade.subject),
-      element("p", "", "Дата: " + grade.date)
-    );
-
-    top.append(info, element("strong", "", String(grade.value)));
-    item.append(top);
-
-    item.append(button("Удалить", "danger", () => {
-      if (!confirm("Удалить эту оценку?")) return;
-      data.grades = data.grades.filter(x => x.id !== grade.id);
-      saveData();
-    }));
-
-    list.append(item);
-  });
-}
-
-function renderHome() {
-  document.getElementById("statLessons").textContent = data.schedule.length;
-  document.getElementById("statHomework").textContent =
-    data.homework.filter(x => !x.done).length;
-  document.getElementById("statGrades").textContent = data.grades.length;
-
-  const summary = document.getElementById("homeSummary");
-  summary.replaceChildren();
-
-  const pending = data.homework.filter(x => !x.done).length;
-
-  summary.append(element("p", "", "Уроков в расписании: " + data.schedule.length));
-  summary.append(element("p", "", "Невыполненных заданий: " + pending));
-  summary.append(element("p", "", "Добавленных оценок: " + data.grades.length));
-
-  if (pending) {
-    summary.append(button("Перейти к домашке", "primary", () => showPage("homework")));
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    res.writeHead(405);
+    res.end("Method Not Allowed");
+    return;
   }
-}
 
-function renderAll() {
-  renderSchedule();
-  renderHomework();
-  renderGrades();
-  renderHome();
-}
+  if (pathname === "/" || pathname === "/index.html") {
+    const filePath = path.join(__dirname, "index.html");
 
-document.getElementById("scheduleForm").addEventListener("submit", e => {
-  e.preventDefault();
+    fs.readFile(filePath, (error, content) => {
+      if (error) {
+        res.writeHead(500, {
+          "Content-Type": "text/plain; charset=utf-8"
+        });
+        res.end("Не удалось прочитать index.html");
+        return;
+      }
 
-  data.schedule.push({
-    id: makeId(),
-    day: document.getElementById("lessonDay").value,
-    time: document.getElementById("lessonTime").value,
-    subject: document.getElementById("lessonName").value.trim(),
-    room: document.getElementById("lessonRoom").value.trim()
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8"
+      });
+      res.end(req.method === "HEAD" ? undefined : content);
+    });
+    return;
+  }
+
+  res.writeHead(404, {
+    "Content-Type": "application/json; charset=utf-8"
   });
-
-  e.target.reset();
-  saveData();
+  res.end(JSON.stringify({ error: "Маршрут не найден" }));
 });
 
-document.getElementById("homeworkForm").addEventListener("submit", e => {
-  e.preventDefault();
+const port = process.env.PORT || 3000;
 
-  data.homework.push({
-    id: makeId(),
-    subject: document.getElementById("hwSubject").value.trim(),
-    text: document.getElementById("hwTask").value.trim(),
-    date: document.getElementById("hwDate").value,
-    done: false
-  });
-
-  e.target.reset();
-  saveData();
+server.listen(port, "0.0.0.0", () => {
+  console.log("StudyOS server started on port " + port);
+  connectMesh();
 });
-
-document.getElementById("gradeForm").addEventListener("submit", e => {
-  e.preventDefault();
-
-  data.grades.push({
-    id: makeId(),
-    subject: document.getElementById("gradeSubject").value.trim(),
-    value: Number(document.getElementById("gradeValue").value),
-    date: document.getElementById("gradeDate").value
-  });
-
-  e.target.reset();
-  document.getElementById("gradeDate").value =
-    new Date().toISOString().slice(0, 10);
-
-  saveData();
-});
-
-document.getElementById("aiForm").addEventListener("submit", e => {
-  e.preventDefault();
-
-  const subject = document.getElementById("aiSubject").value.trim();
-  const question = document.getElementById("aiQuestion").value.trim();
-
-  if (!question) return;
-
-  const prompt =
-    "Помоги мне разобраться со школьным заданием." +
-    (subject ? "\nПредмет: " + subject + "." : "") +
-    "\nОбъясни понятным языком, на уровне школьника, и проверь ответ.\n\n" +
-    question;
-
-  window.open(
-    "https://chatgpt.com/?q=" + encodeURIComponent(prompt),
-    "_blank",
-    "noopener"
-  );
-});
-
-document.getElementById("gradeDate").value =
-  new Date().toISOString().slice(0, 10);
-
-renderAll();
-</script>
-
-</body>
-</html>
