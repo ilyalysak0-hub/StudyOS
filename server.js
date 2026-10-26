@@ -1,4 +1,6 @@
 const http = require("http");
+const fs = require("fs");
+const path = require("path");
 
 let meshClient = null;
 let meshStatus = "not_configured";
@@ -7,14 +9,10 @@ async function connectMesh() {
   const login = process.env.MESH_LOGIN;
   const password = process.env.MESH_PASSWORD;
 
-  if (!login || !password) {
-    meshStatus = "not_configured";
-    return;
-  }
+  if (!login || !password) return;
 
   try {
     const Dnevnik = require("dnevnik-mos-ru-api");
-
     const auth = new Dnevnik.PuppeteerAuthenticator(
       login,
       password,
@@ -28,17 +26,36 @@ async function connectMesh() {
     meshStatus = "connected";
   } catch (error) {
     meshStatus = "error";
-    console.error("Не удалось подключить МЭШ:", error.message);
+    console.error("Ошибка подключения МЭШ:", error.message);
   }
 }
 
 const server = http.createServer(async (req, res) => {
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  const pathname = new URL(req.url, "http://localhost").pathname;
+
   res.setHeader("Access-Control-Allow-Origin", "*");
 
-  const path = new URL(req.url, "http://localhost").pathname;
+  if (pathname === "/" || pathname === "/index.html") {
+    fs.readFile(path.join(__dirname, "index.html"), (error, content) => {
+      if (error) {
+        res.writeHead(500, {
+          "Content-Type": "text/plain; charset=utf-8"
+        });
+        res.end("Не удалось прочитать index.html");
+        return;
+      }
 
-  if (path === "/api/status") {
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8"
+      });
+      res.end(content);
+    });
+    return;
+  }
+
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+
+  if (pathname === "/api/status") {
     res.writeHead(200);
     res.end(JSON.stringify({
       app: "StudyOS",
@@ -48,7 +65,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (path === "/api/mesh/status") {
+  if (pathname === "/api/mesh/status") {
     res.writeHead(200);
     res.end(JSON.stringify({
       connected: Boolean(meshClient),
@@ -57,7 +74,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (["/api/schedule", "/api/homework", "/api/grades"].includes(path)) {
+  if (["/api/schedule", "/api/homework", "/api/grades"].includes(pathname)) {
     if (!meshClient) {
       res.writeHead(503);
       res.end(JSON.stringify({
@@ -68,15 +85,13 @@ const server = http.createServer(async (req, res) => {
     }
 
     try {
-      const Dnevnik = require("dnevnik-mos-ru-api");
       const { DateTime } = require("luxon");
       const from = DateTime.now().minus({ days: 7 });
-
       let data;
 
-      if (path === "/api/schedule") {
+      if (pathname === "/api/schedule") {
         data = await meshClient.getSchedule(from);
-      } else if (path === "/api/homework") {
+      } else if (pathname === "/api/homework") {
         data = await meshClient.getHomework(from);
       } else {
         data = await meshClient.getMarks(from);
