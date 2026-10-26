@@ -54,19 +54,18 @@ async function connectMesh() {
       console.log("Проверяем доступность school.mos.ru");
 
       const response = await page.goto("https://school.mos.ru", {
-        waitUntil: "commit",
+        waitUntil: "domcontentloaded",
         timeout: 20000
       });
 
       console.log("URL:", page.url());
       console.log("HTTP-статус:", response?.status() ?? "нет ответа");
+      console.log("Сайт МЭШ открылся");
 
-      try {
-        await page.waitForSelector("body", { timeout: 5000 });
-        console.log("HTML-документ появился");
-      } catch {
-        console.log("Документ не появился за 5 секунд");
-      }
+    } catch (error) {
+      console.error("Не удалось открыть сайт МЭШ:", error.message);
+      throw error;
+
     } finally {
       await page.close();
     }
